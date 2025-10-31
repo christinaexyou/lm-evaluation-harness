@@ -1,0 +1,71 @@
+name: Generate Task List
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to use for lm-evaluation-harness'
+        required: false
+        default: 'main'
+        type: string
+
+jobs:
+
+  generate-task-list:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyyaml>=6.0
+
+    - name: Clone ODH test repository to temporary directory
+      run: |
+        TEMP_DIR=$(mktemp -d)
+        echo "Temporary directory created at: $TEMP_DIR"
+        echo "TEMP_DIR=${TEMP_DIR}" >> $GITHUB_ENV
+        ODH_TEST_REPO_DIR=https://github.com/opendatahub-io/opendatahub-tests.git
+        git clone $ODH_TEST_REPO_DIR $TEMP_DIR
+        echo "ODH test repository cloned to: $TEMP_DIR/opendatahub-tests"
+
+    - name: Generate task list
+      run: |
+        chmod +x tests/tasks/generate_task_list.sh
+        tests/tasks/generate_task_list.sh "${{ github.event.inputs.branch || 'main' }}"
+      env:
+        PYTHONPATH: ${{ github.workspace }}/lmeval/tasks
+
+    - name: Group tasks by dataset
+      run: |
+        cd tests/tasks
+        python3 group_tasks_by_dataset.py
+
+    - name: Commit and push changes
+      run: |
+        cd $TEMP_DIR/opendatahub-tests/
+        git remote add opendatahub-tests https://github.com/opendatahub-io/opendatahub-tests.git
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add lmeval/tasks/new_task_list.csv lmeval/tasks/dataset_groupings.csv
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Update task list and dataset groupings from branch ${{ github.event.inputs.branch}}"
+          git push opendatahub-tests ${{ github.event.inputs.branch}}
+        fi
+
+    - name: Delete temporary directory
+      run: |
+        rm -rf $TEMP_DIR
+        echo "Temporary directory deleted"
